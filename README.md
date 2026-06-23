@@ -13,6 +13,7 @@ No lossy summaries. No "compress and hope." The model answers from real history,
 
 <br/>
 
+[![Release](https://img.shields.io/github/v/release/arminanton/hermes-cmx?style=flat-square&color=8b5cf6)](https://github.com/arminanton/hermes-cmx/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg?style=flat-square)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-145%20passing-22c55e.svg?style=flat-square)](tests/)
 [![Backend](https://img.shields.io/badge/backend-SQLite%20·%20Postgres-3b82f6.svg?style=flat-square)](#-choose-your-backend)
