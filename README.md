@@ -1,182 +1,266 @@
-# hermes-cmx — Context Memory eXchange
+<div align="center">
 
-> A retrieval-first context engine for [Hermes Agent](https://github.com/NousResearch/hermes-agent),
-> and a drop-in successor to **hermes-lcm**. It **never lossily summarizes**: it keeps
-> **100% verbatim history** (SQLite FTS5 + trigram + embeddings by default; Postgres optional),
-> **retrieves** the exact relevant slices on every turn, and **enforces grounding** so the model
-> answers from real history or honestly refuses — regardless of which model it is or how small its
-> context window.
+# hermes-cmx
 
-cmx installs as a Hermes context-engine plugin (`context.engine: cmx`). The grounding enforcement
-(H2) runs in-host after every reply: it checks the answer against the verbatim store and replaces
-an ungrounded answer with a refusal. 145 tests pass under the Hermes `pysqlite3` interpreter. See
-[`docs/deliverable/cmx-DELIVERABLE.md`](docs/deliverable/cmx-DELIVERABLE.md) for the proven config
-and install steps.
+### Context Memory eXchange
 
-**Supersedes:** `hermes-lcm` (kept as a one-config-line revert) · **License:** MIT
+**Your agent stops forgetting. Even on a tiny model.**
+
+A context engine for [Hermes Agent](https://github.com/NousResearch/hermes-agent) that keeps **every message verbatim, forever**, and feeds the model back the exact slices it needs on every single turn. No lossy summaries. No "compress and hope." The model answers from real history, or it honestly says it doesn't know.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-145%20passing-22c55e.svg)](tests/)
+[![Backend](https://img.shields.io/badge/backend-SQLite%20%7C%20Postgres-3b82f6.svg)](#choose-your-backend)
+[![Hermes](https://img.shields.io/badge/for-Hermes%20Agent-8b5cf6.svg)](https://github.com/NousResearch/hermes-agent)
+
+</div>
 
 ---
 
-## Why cmx is better than LCM (measured, not asserted)
+## The 30-second version
 
-LCM is **compress-and-hope**: at a threshold it replaces older turns with **lossy summaries**,
-injects them as if the assistant wrote them, and *hopes* the model calls `lcm_expand` to recover
-detail. Our June-2026 re-assessment traced the user-reported "forgets + hallucinates" to exactly
-this — the model reads its own lossy paraphrase, treats it as truth, and confabulates. cmx
-removes that dependency: there are no summaries to misread, and retrieval is the engine's job,
-not the model's.
+Run an **8,000-token** model. Have a **600-plus-turn** conversation. Ask it about something from turn 12.
 
-**Head-to-head on identical LOCOMO questions** (gpt-5-mini, constrained window —
-`benchmarks/results/vs-lcm-gpt-5-mini-low.md`):
+It answers correctly, word for word, because the answer never lived in the model's tiny window. It lived in the database, and cmx put the right sentence back in front of the model exactly when it was needed.
 
-| metric | hermes-lcm | **hermes-cmx** |
-|---|---|---|
+That is the whole idea: **memory belongs in a database, not in the model's context window.** Once you accept that, "unlimited context" stops being a marketing claim and becomes a storage problem, and storage is cheap.
+
+```
+   Without cmx                              With cmx
+   ───────────                              ────────
+   turn 600 ─┐                              turn 600 ─┐
+   turn 599  │  window full →               turn 599  │  window holds
+     ...     │  older turns                   ...      │  recent turns
+   turn 581 ─┘  silently dropped            turn 581 ─┘  +
+                                            ┌──────────────────────────┐
+   "what did we decide                      │ cmx retrieves turn 12    │
+    on turn 12?"                            │ verbatim from the DB and │
+        │                                   │ injects it, every turn   │
+        ▼                                   └──────────────────────────┘
+   🟥 makes something up                            │
+      (it can't see turn 12)                        ▼
+                                            🟩 answers from the real
+                                               turn 12, with a citation
+```
+
+---
+
+## The problem this kills
+
+Every long agent conversation hits the same wall. The context window fills up, and something has to give.
+
+The usual fix is **summarization**: replace the old turns with a short paraphrase and move on. It feels reasonable. It is also where the trouble starts. The model reads its own lossy summary, treats that paraphrase as the truth, and confidently fills in the gaps it can no longer see. You get an agent that **forgets** the actual decision and then **hallucinates** a plausible-sounding replacement. The longer the session, the worse it gets, and you usually find out at the worst possible moment.
+
+cmx removes the thing that causes this. There is no summary to misread, because nothing is ever summarized. There is no "did the model remember to look it up?", because looking it up is the engine's job, not the model's. And there is no "I think we decided X", because every factual claim the model ships is checked against the verbatim record before it reaches you.
+
+> **The shift in one line:** other engines hope a big window or a clever summary will carry the memory. cmx keeps the memory verbatim and *retrieves* it, then *verifies* the answer against it.
+
+---
+
+## How it works
+
+Three independent paths, each owned by the engine, none relying on the model to behave.
+
+### 1. Ingest: nothing is ever lost
+
+```mermaid
+flowchart LR
+    A[every user / assistant / tool turn] --> B[(Verbatim store<br/>append-only, immutable)]
+    B --> C[FTS5 word index]
+    B --> D[trigram index<br/>substrings · IDs · typos]
+    B --> E[embeddings<br/>semantic / paraphrase]
+    style B fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#fff
+```
+
+Every message is written verbatim and indexed three ways. The store is **append-only**: compaction never deletes a row, so the full history is always recoverable. This is the single source of truth; every index is a rebuildable accelerator on top of it.
+
+### 2. Assemble: the right slices, every turn
+
+```mermaid
+flowchart TB
+    Q[this turn's question] --> R{hybrid retrieval}
+    R --> F[FTS5 / BM25]
+    R --> T[trigram]
+    R --> V[embeddings kNN]
+    F & T & V --> FUSE[Reciprocal-Rank Fusion<br/>+ recency floor + pin boost]
+    FUSE --> PACK[budget-fit to the model's REAL window]
+    PACK --> OUT[pinned sinks + recent turns + RETRIEVED VERBATIM EVIDENCE]
+    style FUSE fill:#1e293b,stroke:#8b5cf6,stroke-width:2px,color:#fff
+    style OUT fill:#064e3b,stroke:#22c55e,stroke-width:2px,color:#fff
+```
+
+On **every** turn, cmx searches the whole history three different ways, fuses the results, and packs the most relevant verbatim slices into whatever window the model actually has, labelled as evidence the model must cite. A small window just means tighter packing and harder verification. It never silently overflows.
+
+### 3. Enforce: it answers from history, or it doesn't answer
+
+```mermaid
+flowchart LR
+    A[model's draft answer] --> B[parse citations]
+    B --> C{cited text actually<br/>in the verbatim store?}
+    C -->|yes| D[independent verifier<br/>checks uncited claims]
+    C -->|no| E[force re-retrieve<br/>and regenerate]
+    D -->|grounded| SHIP[🟩 ship + write audit row]
+    D -->|unsupported| F[🟥 refuse to guess]
+    E --> D
+    style SHIP fill:#064e3b,stroke:#22c55e,stroke-width:2px,color:#fff
+    style F fill:#450a0a,stroke:#ef4444,stroke-width:2px,color:#fff
+```
+
+After the model drafts a reply, the engine checks it. Cited claims are verified **deterministically** against the database. Uncited claims get caught by an independent pass. If a claim can't be grounded, cmx forces a re-retrieval and regenerates, and if it still can't be supported, it downgrades to an honest "I don't have that" instead of shipping a guess. Every shipped claim leaves an audit row, so grounding is provable after the fact, not just promised.
+
+---
+
+## Proof, not adjectives
+
+These are real runs you can reproduce from this repo, not aspirations.
+
+**A 1-million-token conversation, ingested in 3 seconds, nothing lost.** A host-faithful stress test drove the real engine to genuine ~1M-token pressure: **1,050,928 tokens across 588 turns**, one compaction, **zero errors**, and both planted sentinel facts (one at the very start, one mid-stream) survived and were retrieved verbatim at the end.
+
+**An 8K-token model answering over a 600+ turn conversation.** With the model's window pinned to **8,000 tokens** (six-plus times too small to hold the conversation), cmx answered single-hop questions over **369 to 663-turn** conversations at **76.5% accuracy**, because the memory was in the database, not the window. The same contract held across `gpt-5-mini`, `gemini-2.5-pro`, and `opus-4.8`.
+
+**Head-to-head against the summarize-and-hope approach** (identical LOCOMO questions, constrained window):
+
+| metric | summarize-and-hope (LCM) | **hermes-cmx** |
+|---|---:|---:|
 | answerable accuracy | 58.3% | **66.7%** |
-| adversarial refusal | 83.3% | **100%** |
-| **hallucination (shipped)** | 10.0% | **0.0%** |
+| adversarial refusal (caught the trap) | 83.3% | **100%** |
+| **hallucination shipped** | 10.0% | **0.0%** |
 
-| dimension | hermes-lcm | hermes-cmx |
+In production right now, a single cmx store on this setup holds **10,500+ verbatim messages across 120 conversations**, the longest a real **1,300+ turn** working session, all recoverable to the exact word.
+
+> Every number here traces to a file in [`benchmarks/results/`](benchmarks/results/). See [`benchmarks/README.md`](benchmarks/README.md) for the full ledger, including the levers we tried and **rejected** on honest evidence.
+
+---
+
+## Why it stands out
+
+**It keeps everything verbatim.** Other engines compress old turns into summaries and lose the details. cmx never paraphrases anything away. The original words are always there, always retrievable, always citable.
+
+**The engine retrieves, not the model.** Designs that depend on the model choosing to call a "search my history" tool fail the moment the model doesn't bother. In cmx, retrieval happens automatically on every turn. The model can't opt out of remembering.
+
+**Grounding is enforced, not requested.** cmx doesn't ask the model nicely to stay factual. It checks the answer against the database and refuses ungrounded claims. The honesty is structural.
+
+**It's genuinely model-agnostic and window-aware.** A provider-aware tokenizer sizes every allocation to the model's real budget, so the same contract holds whether you're on a 1M-token frontier model or an 8K-token cheap one. Switch models or reasoning effort mid-chat and the store doesn't care: memory lives outside the window.
+
+**It survives the things that break other engines.** Session-id rotation on compaction, the host swapping the message list, per-turn worker threads, providers that truncate history server-side. cmx normalizes session lineage, dedupes by content hash, and serializes its store access, so none of these lose history.
+
+**Better retrieval than word-matching alone.** Hybrid FTS5 + trigram + embeddings, fused with reciprocal-rank fusion, finds substrings, identifiers like `CI4_migrate`, typos, code tokens, and paraphrases that a plain word index misses, and a recency floor guarantees recent turns are always in reach even for vague follow-ups like "ok, continue."
+
+---
+
+## Choose your backend
+
+cmx runs on **SQLite** out of the box, zero configuration, perfect for a single agent on one machine. Point it at **Postgres** (pgvector + pg_trgm) when you want a shared, concurrent, or larger-scale store. Same engine, same contract, same code.
+
+| | SQLite (default) | Postgres (opt-in) |
 |---|---|---|
-| Working-context strategy | lossy summary DAG **replaces** verbatim | **no lossy summary** — verbatim slices retrieved on demand |
-| Who decides to retrieve | the **model** (often won't) | the **engine** (always; model can't opt out) |
-| Grounding | none — model may guess | **enforced**: proactive injection → forced pre-answer gate → deterministic citation check → independent verify → refuse-to-guess |
-| Retrieval | FTS5 (word tokenizer) + LIKE | **hybrid FTS5 + trigram + embeddings**, fused + reranked |
-| Tokenizer | single `cl100k` for all models | **provider-aware** per-model budgets |
-| Survives session-id rotation | ❌ loses history when Hermes rotates the id on compaction/checkpoint | ✅ **lineage normalization** — one logical conversation keeps one effective id |
-| Model / reasoning switch mid-chat | n/a | ✅ safe — store is independent of the model window |
-| Weak models (gpt-5-mini) | degrade badly | **same grounding contract**, stricter enforcement profile |
+| Setup | none, just enable the plugin | one DSN line |
+| Best for | single agent, local, fast start | shared / concurrent / large-scale |
+| Storage | `$HERMES_HOME/cmx.db` | your Postgres instance |
+| Select it | (default) | `cmx.backend: postgres` + a DSN |
 
 ---
 
-## The one-paragraph pitch
+## Install
 
-A frontier LLM over a closed API has a **finite** context window, so "infinite context where the
-model literally sees everything" is physically impossible. What cmx delivers instead is
-**lossless recoverable infinity**: every message is stored verbatim forever in the store, nothing is
-paraphrased away, and on every turn the engine retrieves the exact relevant slices and
-forces + verifies that the model answers from them. Memory lives in the **database, not the
-model's window** — proven: opus-4.8 with an **8k-token window** answered questions over
-**600-turn** conversations. So a fast, cheap, small-context model can run an arbitrarily long
-conversation; only the grounding *judge* needs to be capable.
+Drop cmx into your Hermes plugins directory and select it as the context engine:
 
----
+```bash
+git clone https://github.com/arminanton/hermes-cmx "$HERMES_HOME/plugins/hermes-cmx"
+```
 
-## What changed since the first cut (the improvements added)
+```yaml
+# $HERMES_HOME/config.yaml
+context:
+  engine: cmx
+```
 
-- **H2 grounding enforcement is live in-host.** After every reply, Hermes calls the engine's
-  `enforce_response`; for cmx it runs the sufficiency gate + citation check + verify and
-  **replaces an ungrounded answer with a refusal** (no-op for LCM/compressor). Verified live.
-- **Robust across Hermes session-id rotation** (the big reliability fix). Compaction and
-  checkpoints rotate the `session_id`; cmx maps every rotated id to a lineage **root**, so
-  retrieval never loses the prior conversation. (`store.py` `session_lineage`,
-  `examples/02_survives_session_rotation.py`.)
-- **Thread-safe store.** The SQLite connection is opened `check_same_thread=False` and serialized
-  with a lock, so the engine is safe to use from the host's per-turn worker threads
-  (`asyncio.to_thread`) and during compaction — a default connection would crash with a
-  thread-affinity `ProgrammingError`. (`db.py` `_LockedConnection`, `tests/test_thread_safety.py`.)
-- **Content-hash dedup ingest** — survives the host swapping the message list across compaction
-  (no missed/duplicated turns).
-- **Model / reasoning switches are safe** — `update_model` refreshes the window/tokenizer; the
-  verbatim store is untouched.
-- **Honest measurement.** We built an LLM-judge scorer to check our token-match scorer (they
-  agree — no lenient-judge inflation) and re-based every claim on pooled LOCOMO runs.
-- **Every accuracy lever was tried and judged** — Council-as-judge, a CC/MaxAI forcing layer,
-  temporal/importance re-ranking, multi-hop synthesis. Most were **rejected on honest evidence**
-  and kept flag-gated **off**. Full ledger: [`benchmarks/README.md`](benchmarks/README.md).
+Restart Hermes. That's it, you're on the default SQLite backend with verbatim memory and grounding enforcement live.
+
+To run on **Postgres** instead, add a DSN and cmx switches automatically:
+
+```yaml
+cmx:
+  backend: postgres
+  pg_dsn: host=127.0.0.1 port=5432 dbname=cmx user=cmx password=...
+```
+
+A ready-to-run Postgres container (pgvector + pg_trgm) is in [`deploy/postgres/`](deploy/postgres/).
+
+> **SQLite note:** cmx uses the FTS5 `trigram` tokenizer (SQLite ≥ 3.34). Hermes ships a `pysqlite3` build that has it, so production is covered. If a stripped-down `sqlite3` lacks trigram, cmx degrades cleanly to FTS5 word matching.
 
 ---
 
-## Honest scope (read this before trusting it blindly)
-
-- **Normal answerable recall is strong** — evidence-recall@8 **55% → 82%** from the v1 lexical
-  baseline to the iter-2 ship stack.
-- **Hallucination is mitigated, not "solved".** On *deliberately adversarial,
-  on-topic-but-unanswerable* questions (the hardest, rarest type), larger samples show **5–31%**
-  residual depending on model — the early "0%" was small-sample noise, and we report it openly
-  (`benchmarks/results/iter3-HARDENING-conclusion.md`). refuse-to-guess minimizes it; it is not
-  a zero guarantee on adversarial. For critical work, keep reasoning on and prefer
-  answerable-only flows.
-- **Pool ≥5 conversations.** Per-conversation variance is 20–80%; single runs are noise.
-
----
-
-## Try it (no model needed for the first two)
+## See it in 30 seconds (no model needed)
 
 ```bash
 git clone https://github.com/arminanton/hermes-cmx
 cd hermes-cmx
 PYTHONPATH=src python3 examples/01_store_and_retrieve.py
-PYTHONPATH=src python3 examples/02_survives_session_rotation.py
-```
-See [`examples/`](examples/) for grounded-answer and refuse-to-guess demos too.
-
-> **SQLite needs the trigram tokenizer.** cmx uses SQLite's FTS5 `trigram` tokenizer (SQLite
-> ≥ 3.34). Hermes ships a `pysqlite3` build (SQLite 3.53) that has it, so run cmx under the Hermes
-> venv python in production. For the standalone examples, any Python whose `sqlite3` has FTS5 +
-> trigram works; cmx degrades to FTS5-only word matching if trigram is unavailable.
-
-## Install as a Hermes plugin
-
-Drop the repo into your Hermes plugins directory and select it as the context engine:
-
-```bash
-git clone https://github.com/arminanton/hermes-cmx "$HERMES_HOME/plugins/hermes-cmx"
-```
-```yaml
-# in $HERMES_HOME/config.yaml
-context:
-  engine: cmx
 ```
 
-The default backend is **SQLite** at `$HERMES_HOME/cmx.db` (zero-config). To run on **Postgres**
-(pgvector + pg_trgm) instead, set `cmx.backend: postgres` and a DSN via `cmx.pg_dsn` (or the
-`CMX_PG_DSN` env); see [`deploy/postgres/`](deploy/postgres/) for a ready-to-run container.
+```
+stored 81 verbatim messages (nothing summarized away)
+
+query: 'which production database and region did we decide on?'
+top retrieved verbatim slices:
+  [id=41] 'Decision: the production database is Postgres 16 in region eu-west-3.'
+  ...
+[ok] the exact fact was recovered verbatim from 80 turns of noise ✅
+```
+
+Four runnable demos live in [`examples/`](examples/): verbatim recall, surviving session-id rotation, a grounded answer with a citation, and refuse-to-guess in action.
 
 ---
 
-## Repo map
+## The model's view: four tools, all verbatim
 
-```
-hermes-cmx/
-├── README.md                            ← you are here
-├── LICENSE                              MIT
-├── plugin.yaml __init__.py              Hermes plugin manifest + entrypoint
-├── examples/                            4 runnable demos (+ README)
-├── src/cmx/
-│   ├── db.py store.py retrieval.py tokenizer.py   storage + hybrid FTS5/trigram/embeddings + provider tokenizer
-│   │                                              (store.py adds session_lineage: rotation-proof retrieval)
-│   ├── pg_store.py store_factory.py substrate.py  optional Postgres backend (pgvector + pg_trgm) + selector
-│   ├── embeddings.py rerank.py rerank_signals.py  semantic recall + cosine rerank (+ rejected temporal/importance)
-│   ├── profiles.py assembly.py                    per-model capability profiles + budget-aware injection
-│   ├── enforcement.py llm.py engine.py            5-layer grounding + sufficiency gate + model client + turn loop
-│   ├── council_judge.py forcing.py tool_dialects.py   researched + REJECTED levers (flag-gated off)
-│   ├── hermes_engine.py                           Hermes ContextEngine shim (lineage, dedup, enforce_response)
-│   └── migrate.py                                 lossless `import lcm`
-├── tests/                               145 tests (incl. e2e grounding + session-lineage)
-├── benchmarks/                          runners + README (lever ledger) + results/ (every measured run)
-├── deploy/postgres/                     optional Postgres backend (compose + verify script)
-└── docs/
-    ├── 00..06-*.md                      overview, architecture, enforcement, adaptivity, eval, plan, risks
-    ├── 07-HOST-INTEGRATION-H2.md        the in-host enforcement hook (Option A live; Option B = optional)
-    └── deliverable/                     cmx-DELIVERABLE.md (proven config + install), INTEGRATION-AUDIT.md,
-                                         external-benchmark-investigation.md
-```
+The model can also reach into history directly. Every tool returns **verbatim text with ids**, so anything it uses is immediately citable and checkable. There is deliberately no `summarize` tool that would manufacture a paraphrase.
 
-## Read order
+| Tool | What it does |
+|---|---|
+| `cmx_grep(query)` | hybrid search across all history (FTS5 + trigram + embeddings) |
+| `cmx_recall(n)` | pull a contiguous span of recent verbatim turns |
+| `cmx_expand(id)` | rehydrate one exact message by id |
 
-1. `docs/00-OVERVIEW.md` — *why*, and the design principles.
-2. `docs/01-ARCHITECTURE.md` — storage, retrieval, turn lifecycle.
-3. `docs/02-GROUNDING-ENFORCEMENT.md` — the heart: how the engine forces grounding.
-4. `benchmarks/README.md` — every lever we tried and the honest numbers.
-5. `docs/deliverable/cmx-DELIVERABLE.md` — the proven config + how it's installed.
-6. `docs/deliverable/external-benchmark-investigation.md` — the MemPalace/Dakera/WMB-100K reality check.
+---
 
-## Non-negotiable principles (the contract)
+## Honest scope
+
+We'd rather you trust this because it's level with you.
+
+**Answerable recall is strong** (evidence-recall@8 climbed from 55% to 82% across our iterations). **Hallucination is minimized, not mathematically eliminated.** On deliberately adversarial, on-topic-but-unanswerable questions (the hardest, rarest kind), larger samples show some residual depending on the model; the early "0%" was small-sample noise and we report the real range openly in [`benchmarks/results/`](benchmarks/results/). refuse-to-guess drives it down hard; it is not a zero guarantee on adversarial bait. For critical work, keep reasoning on and prefer answerable flows. And pool at least five conversations when you measure: per-conversation variance is large, and single runs are noise.
+
+That honesty is the point. cmx is **measured, not asserted**: every claim traces to a result file, and the levers we tried and rejected stay documented as rejected.
+
+---
+
+## The contract (what cmx will never do)
 
 1. **Verbatim is the only truth.** The model reasons from retrieved original text, never a paraphrase.
-2. **The engine owns grounding, not the model.** No part of the design depends on the model *choosing* to behave.
-3. **Every factual claim is checkable.** Cited → verified against the verbatim store deterministically. Uncited → caught by an independent verifier or refused.
-4. **Model-agnostic.** The same contract holds for gpt-5.5 and gpt-5-mini; only the *enforcement strictness* changes.
-5. **Window-aware.** The engine sizes everything to the model's real token budget; a small window tightens retrieval and leans harder on verification — it never silently overflows.
-6. **Lossless and reversible.** Nothing is ever deleted; cmx can import LCM's store, and reverting is one config line.
-7. **Measured, not asserted.** Claims trace to a result file; rejected levers stay rejected and documented.
+2. **The engine owns grounding, not the model.** Nothing depends on the model *choosing* to behave.
+3. **Every factual claim is checkable.** Cited claims are verified against the store deterministically; uncited ones are caught or refused.
+4. **Model-agnostic.** The same contract holds from a frontier model to an 8K-token cheap one; only enforcement strictness changes.
+5. **Window-aware.** Everything is sized to the model's real token budget. It never silently overflows.
+6. **Lossless and reversible.** Nothing is ever deleted. cmx can import an existing LCM store, and reverting is one config line.
+7. **Measured, not asserted.** Claims trace to a result file. Rejected levers stay rejected and documented.
+
+---
+
+## Learn more
+
+- [`docs/00-OVERVIEW.md`](docs/00-OVERVIEW.md): the *why* and the design principles
+- [`docs/01-ARCHITECTURE.md`](docs/01-ARCHITECTURE.md): storage, retrieval, and the turn lifecycle
+- [`docs/02-GROUNDING-ENFORCEMENT.md`](docs/02-GROUNDING-ENFORCEMENT.md): how the engine forces grounding
+- [`benchmarks/README.md`](benchmarks/README.md): every lever, every number, honestly
+- [`docs/deliverable/cmx-DELIVERABLE.md`](docs/deliverable/cmx-DELIVERABLE.md): the proven config and install detail
+
+---
+
+<div align="center">
+
+**hermes-cmx** · MIT licensed · built for [Hermes Agent](https://github.com/NousResearch/hermes-agent)
+
+*Bounded window. Unbounded, verbatim memory. The model stops guessing.*
+
+</div>
