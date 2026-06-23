@@ -1,0 +1,4 @@
+{"label": "single:opus|gate", "foreground": "gpt-5-mini", "ts": "02:34:50", "metrics": {"answerable": 10, "adversarial": 24, "shipped": 10, "answer_acc": 70.0, "adv_refusal": 91.7, "halluc": 20.0}, "elapsed": 270.7}
+{"label": "single:opus|verify-only", "foreground": "gpt-5-mini", "ts": "02:39:21", "metrics": {"answerable": 10, "adversarial": 24, "shipped": 16, "answer_acc": 70.0, "adv_refusal": 70.8, "halluc": 43.8}, "elapsed": 246.4}
+{"label": "council:m5cc|gate", "foreground": "gpt-5-mini", "ts": "02:43:27", "metrics": {"answerable": 10, "adversarial": 24, "shipped": 2, "answer_acc": 10.0, "adv_refusal": 95.8, "halluc": 50.0}, "elapsed": 4127.4}
+{"label": "council:m5cc|verify-only", "foreground": "gpt-5-mini", "ts": "03:52:15", "metrics": {"answerable": 10, "adversarial": 24, "shipped": 16, "answer_acc": 60.0, "adv_refusal": 70.8, "halluc": 43.8}, "elapsed": 206.9}

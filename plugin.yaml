@@ -1,0 +1,10 @@
+name: hermes-cmx
+version: 0.1.0
+description: "Context Memory eXchange — retrieval-first, engine-enforced-grounding context engine for Hermes. Never lossily summarizes; keeps 100% verbatim history (SQLite FTS5+trigram+embeddings by default, Postgres optional); forces + verifies grounding so the model answers from real history or honestly refuses."
+author: "arminanton"
+license: MIT
+provides_context_engine: cmx
+provides_tools:
+  - cmx_grep
+  - cmx_expand
+  - cmx_recall

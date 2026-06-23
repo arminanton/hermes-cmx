@@ -1,0 +1,26 @@
+# cmx runtime
+*.db
+*.db-wal
+*.db-shm
+cmx.db*
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# backup snapshots
+*.bak
+*.bak.*
+*.bak-*
+
+# eval outputs (keep curated results, ignore scratch)
+benchmarks/results/scratch/
+benchmarks/data/*.tmp
+
+# os/editor
+.DS_Store
+*.swp

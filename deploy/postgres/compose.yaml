@@ -1,0 +1,55 @@
+name: cmx-postgres
+
+# Postgres backend for hermes-cmx — true multi-writer context storage for highly-parallel
+# workloads (many tabs x many sub-agents, 30x council fan-out). Containerized on purpose:
+# sidesteps host glibc constraints and ships pgvector + pg_trgm with zero build-from-source.
+#
+#   podman compose -f deploy/postgres/compose.yaml up -d
+#   (or: ./deploy/postgres/run.sh)
+#
+# pgvector/pgvector:pg17 = Postgres 17 + the pgvector extension; pg_trgm + pg_tsvector (FTS)
+# are core/contrib and available out of the box. Together they give cmx all three retrieval
+# signals (full-text, trigram/substring, embeddings) with real concurrent writes (MVCC).
+
+services:
+  cmx-postgres:
+    image: docker.io/pgvector/pgvector:pg17
+    container_name: cmx-postgres
+    environment:
+      POSTGRES_DB: cmx
+      POSTGRES_USER: cmx
+      POSTGRES_PASSWORD: cmx_local_dev   # local-only; override via env for real deploys
+      # tuned for many concurrent writers
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    command:
+      - "postgres"
+      # Tuned LEAN for a RAM-constrained box (~29GB total, heavy swap). Many concurrent
+      # agents are multiplexed by PgBouncer (transaction pooling) onto few real backends,
+      # so we do NOT need a huge max_connections or work_mem here. See deploy/postgres/README.
+      - "-c"
+      - "max_connections=200"           # real backends; PgBouncer fronts the 50-110 agents + council
+      - "-c"
+      - "shared_buffers=256MB"          # conservative; lean on the OS page cache, don't starve the box
+      - "-c"
+      - "effective_cache_size=2GB"      # planner hint: assume this much OS cache is available
+      - "-c"
+      - "work_mem=8MB"                  # bounded per-op memory; raise per-session for heavy queries
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "synchronous_commit=off"        # durable enough for a context store; big write-throughput win
+      - "-c"
+      - "wal_compression=on"
+    ports:
+      - "5433:5432"                    # host 5433 -> container 5432 (5432/540x were busy)
+    volumes:
+      # firecrawl-style host bind-mount: data lives at a real, visible host path and
+      # survives container death / reboot / rebuild. `:z` = SELinux relabel (matches firecrawl).
+      - ./cmx-postgres-data:/var/lib/postgresql/data:z
+      - ./init:/docker-entrypoint-initdb.d:ro   # schema + extensions auto-applied on first boot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cmx -d cmx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-cmx"
+version = "0.1.0"
+description = "Context Memory eXchange — retrieval-first, engine-enforced-grounding context engine for Hermes"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "William Armin Anton", email = "29869547+arminanton@users.noreply.github.com" }]
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["src"]

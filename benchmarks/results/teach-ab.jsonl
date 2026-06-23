@@ -1,0 +1,6 @@
+{"id": "gpt-5-mini|s0|baseline|n10-10", "arm": "baseline", "sample": 0, "metrics": {"answerable": 10, "adversarial": 10, "shipped": 9, "answer_acc": 60.0, "adv_refusal": 90.0, "halluc": 11.1}, "elapsed": 186.4}
+{"id": "gpt-5-mini|s1|baseline|n10-10", "arm": "baseline", "sample": 1, "metrics": {"answerable": 10, "adversarial": 10, "shipped": 8, "answer_acc": 70.0, "adv_refusal": 100.0, "halluc": 0.0}, "elapsed": 192.5}
+{"id": "gpt-5-mini|s2|baseline|n10-10", "arm": "baseline", "sample": 2, "metrics": {"answerable": 10, "adversarial": 10, "shipped": 6, "answer_acc": 50.0, "adv_refusal": 100.0, "halluc": 0.0}, "elapsed": 176.4}
+{"id": "gpt-5-mini|s0|teach|n10-10", "arm": "teach", "sample": 0, "metrics": {"answerable": 10, "adversarial": 10, "shipped": 9, "answer_acc": 50.0, "adv_refusal": 90.0, "halluc": 11.1}, "elapsed": 179.8}
+{"id": "gpt-5-mini|s1|teach|n10-10", "arm": "teach", "sample": 1, "metrics": {"answerable": 10, "adversarial": 10, "shipped": 9, "answer_acc": 60.0, "adv_refusal": 90.0, "halluc": 11.1}, "elapsed": 209.3}
+{"id": "gpt-5-mini|s2|teach|n10-10", "arm": "teach", "sample": 2, "metrics": {"answerable": 10, "adversarial": 10, "shipped": 6, "answer_acc": 50.0, "adv_refusal": 100.0, "halluc": 0.0}, "elapsed": 178.9}

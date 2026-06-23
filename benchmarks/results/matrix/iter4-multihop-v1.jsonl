@@ -1,0 +1,6 @@
+{"arm": "baseline", "seed": 0, "ts": "05:45:59", "raw": {"single_n": 12, "single_ok": 9, "multi_n": 8, "multi_ok": 2, "adv_n": 12, "adv_refused": 11, "halluc": 1, "shipped": 16}, "elapsed": 372.9}
+{"arm": "baseline", "seed": 1, "ts": "05:52:12", "raw": {"single_n": 13, "single_ok": 11, "multi_n": 7, "multi_ok": 4, "adv_n": 12, "adv_refused": 12, "halluc": 0, "shipped": 15}, "elapsed": 417.8}
+{"arm": "baseline", "seed": 2, "ts": "05:59:10", "raw": {"single_n": 9, "single_ok": 6, "multi_n": 11, "multi_ok": 3, "adv_n": 12, "adv_refused": 12, "halluc": 0, "shipped": 14}, "elapsed": 348.7}
+{"arm": "multihop", "seed": 0, "ts": "06:04:59", "raw": {"single_n": 12, "single_ok": 9, "multi_n": 8, "multi_ok": 3, "adv_n": 12, "adv_refused": 11, "halluc": 3, "shipped": 18}, "elapsed": 440.6}
+{"arm": "multihop", "seed": 1, "ts": "06:12:19", "raw": {"single_n": 13, "single_ok": 12, "multi_n": 7, "multi_ok": 4, "adv_n": 12, "adv_refused": 12, "halluc": 1, "shipped": 17}, "elapsed": 662.2}
+{"arm": "multihop", "seed": 2, "ts": "06:23:22", "raw": {"single_n": 9, "single_ok": 7, "multi_n": 11, "multi_ok": 5, "adv_n": 12, "adv_refused": 12, "halluc": 1, "shipped": 19}, "elapsed": 479.5}
